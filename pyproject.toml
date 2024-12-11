@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mykiteconnect"
+version = "0.0.1"
+requires-python = ">= 3.10"
+authors = [{"name"= "sangam"}]
+description = "The unofficial Python client for the Kite Connect trading API"
+readme = "README.md"
+license = {file = "LICENSE"}
+keywords = ["Zerodha", "kiteconnect", "pykiteconnect"]
+dynamic = ["dependencies"]
+
+[project.urls]
+Homepage = "https://github.com/sangam/mykiteconnect"
+Documentation = "https://github.com/sangam/mykiteconnect/wiki"
+Repository = "https://github.com/sangam/mykiteconnect"
+Issues = "https://github.com/sangam/mykiteconnect/issues"
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
