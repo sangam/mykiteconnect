@@ -34,12 +34,12 @@ class KiteConnect(object):
     # Default root API endpoint. It's possible to
     # override this by passing the `root` parameter during initialisation.
     _default_root_uri = "https://api.kite.trade"
-    _default_api_uri = "https://kite.zerodha.com/api"
+    _default_base_uri = "https://kite.zerodha.com"
     _default_login_uri = "https://kite.zerodha.com/connect/login"
     _default_timeout = 7  # In seconds
 
     # Kite connect header version
-    kite_header_version = "3"
+    kite_header_version = "3.0.0"
 
     # Constants
     # Products
@@ -107,8 +107,8 @@ class KiteConnect(object):
 
     # URIs to various calls
     _routes = {
-        "login": "login",
-        "twofa": "twofa",
+        "login": "api/login",
+        "twofa": "api/twofa",
         "api.token": "/session/token",
         "api.token.invalidate": "/session/token",
         "api.token.renew": "/session/refresh_token",
@@ -169,29 +169,29 @@ class KiteConnect(object):
     }
 
     def __init__(self,
-                 api_key,
                  username,
-                 password=None,
-                 access_token=None,
+                 password,
+                 otp_seed,
+                 api_key=None,
+                 api_secret=None,
                  root=None,
+                 base=None,
                  debug=False,
                  timeout=None,
                  proxies=None,
                  pool=None,
-                 api=None,
                  disable_ssl=False):
         """
         Initialise a new Kite Connect client instance.
 
+        - `username` is the username issued to you
+        - `password` is the password of username
+        - `otp_seed` is the seed for generating the otp 
         - `api_key` is the key issued to you
-        - `access_token` is the token obtained after the login flow in
-            exchange for the `request_token` . Pre-login, this will default to None,
-        but once you have obtained it, you should
-        persist it in a database or session to pass
-        to the Kite Connect class initialisation for subsequent requests.
         - `root` is the API end point root. Unless you explicitly
         want to send API requests to a non-default endpoint, this
         can be ignored.
+        - `base` is the API endpoint of Zerodha Login workflow and Console
         - `debug`, if set to True, will serialise and print requests
         and responses to stdout.
         - `timeout` is the time (seconds) for which the API client will wait for
@@ -204,20 +204,39 @@ class KiteConnect(object):
         """
         self.debug = debug
         self.api_key = api_key
+        self.api_secret = api_secret
         self.username = username
         self.password = password
+        self.otp_seed = otp_seed
         self.session_expiry_hook = None
         self.disable_ssl = disable_ssl
-        self.access_token = access_token
         self.proxies = proxies if proxies else {}
 
         self.root = root or self._default_root_uri
-        self.api = api or self._default_api_uri
+        self.base = base or self._default_base_uri
         self.timeout = timeout or self._default_timeout
 
         # Create requests session by default
         # Same session to be used by pool connections
         self.reqsession = requests.Session()
+        self.headers = {
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+            "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "cache-control": "no-cache",
+            "dnt": "1",
+            "priority": "u=0, i",
+            "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "Windows",
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+            "upgrade-insecure-requests": "1",
+            "x-kite-version": self.kite_header_version
+        }
+        self.reqsession.headers.update(self.headers)
         if pool:
             reqadapter = requests.adapters.HTTPAdapter(**pool)
             self.reqsession.mount("https://", reqadapter)
@@ -326,7 +345,18 @@ class KiteConnect(object):
             "api_key": self.api_key,
             "refresh_token": refresh_token
         })
+    
+    def login_worklow(self):
+        """Login workflow"""
+        if self.username and self.password and self.otp_seed:
+            if self.api_key and self.api_secret:
+                self.reqsession.get(
+                    self.login_url(),
+                    
+                )
 
+        return 0
+    
     def margins(self, segment=None):
         """Get account balance and cash margin details for a particular segment.
 
@@ -863,7 +893,7 @@ class KiteConnect(object):
         return records
 
     def _user_agent(self):
-        return (__title__ + "-python/").capitalize() + __version__
+        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
     def _get(self, route, url_args=None, params=None, is_json=False):
         """Alias for sending a GET request."""
@@ -881,6 +911,10 @@ class KiteConnect(object):
         """Alias for sending a DELETE request."""
         return self._request(route, "DELETE", url_args=url_args, params=params, is_json=is_json)
 
+    def _header(self):
+        """Custom headers"""
+        self.headers["x-kite-userid"] = self.username,
+
     def _request(self, route, method, url_args=None, params=None, is_json=False, query_params=None):
         """Make an HTTP request."""
         # Form a restful URL
@@ -890,17 +924,16 @@ class KiteConnect(object):
             uri = self._routes[route]
 
         if uri in ["login", "twofa"]:
-            url=urljoin(self.api, uri)
+            url = urljoin(self.base, uri)
         else:
             url = urljoin(self.root, uri)
 
         # Custom headers
-        headers = {
-            "X-Kite-Version": self.kite_header_version,
-            "User-Agent": self._user_agent()
-        }
+        headers = self._header()
 
-        if self.api_key and self.access_token:
+        if self.enctoken:
+            headers['Authorization'] = "enctoken {}".format(self.enctoken)
+        elif self.api_key and self.access_token:
             # set authorization header
             auth_header = self.api_key + ":" + self.access_token
             headers["Authorization"] = "token {}".format(auth_header)
