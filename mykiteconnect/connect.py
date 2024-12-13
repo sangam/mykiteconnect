@@ -7,6 +7,7 @@
     :copyright: (c) 2024 by Sangam Chopade.
     :license: see LICENSE for details.
 """
+import urllib.parse
 from six import StringIO, PY2
 from six.moves.urllib.parse import urljoin
 import csv
@@ -17,6 +18,8 @@ import logging
 import datetime
 import requests
 import warnings
+import urllib
+import pyotp
 
 from .__version__ import __version__, __title__
 import mykiteconnect.exceptions as ex
@@ -107,7 +110,9 @@ class KiteConnect(object):
 
     # URIs to various calls
     _routes = {
-        "login": "api/login",
+        "connect": "connect/login?api_key={api_key}&v={version}",
+        "login": "connect/login",
+        "loginapi": "api/login",
         "twofa": "api/twofa",
         "api.token": "/session/token",
         "api.token.invalidate": "/session/token",
@@ -230,9 +235,10 @@ class KiteConnect(object):
             "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": "Windows",
-            "sec-fetch-dest": "empty",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-site": "same-origin",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "none",
+            "sec-fetch-user": "?1",
             "upgrade-insecure-requests": "1",
             "x-kite-version": self.kite_header_version
         }
@@ -267,6 +273,9 @@ class KiteConnect(object):
     def set_access_token(self, access_token):
         """Set the `access_token` received after a successful authentication."""
         self.access_token = access_token
+
+    def set_enctoken(self, enctoken):
+        self.enctoken = enctoken
 
     def login_url(self):
         """Get the remote login url to which a user should be redirected to initiate the login flow."""
@@ -350,9 +359,68 @@ class KiteConnect(object):
         """Login workflow"""
         if self.username and self.password and self.otp_seed:
             if self.api_key and self.api_secret:
-                self.reqsession.get(
-                    self.login_url(),
-                    
+                response = self._get(
+                    "connect",
+                    url_args={
+                        "api_key": self.api_key,
+                        "version": self.kite_header_version}
+                )
+                response = self._post(
+                    "loginapi",
+                    params = urllib.parse.urlencode(
+                        {
+                            'user_id': self.username, 
+                            'password': self.password, 
+                            'type': 'user_id'
+                        }
+                    )
+                )
+                response = self._post(
+                    "twofa",
+                    params = urllib.parse.urlencode(
+                        {
+                            'user_id': self.username,
+                            'request_id': response["data"]["request_id"],
+                            'twofa_value': pyotp.TOTP(self.otp_seed).now(),
+                            'twofa_type': "totp",
+                            'skip_session': 'true'
+                        }
+                    )
+                )
+                request_token = self._get(
+                    "login",
+                    params = {'skip_session': 'true'}
+                )
+                access_token = self.generate_session(request_token, self.api_secret)
+                self.set_access_token(access_token)
+            else:
+                response = self._get(
+                    "login",
+                    params = {
+                        "skip_session": 'true',
+                    }
+                )
+                response = self._post(
+                    "login",
+                    params = urllib.parse.urlencode(
+                        {
+                            'user_id': self.username, 
+                            'password': self.password, 
+                            'type': 'user_id'
+                        }
+                    )
+                )
+                response = self._post(
+                    "twofa",
+                    params = urllib.parse.urlencode(
+                        {
+                            'user_id': self.username,
+                            'request_id': response["data"]["request_id"],
+                            'twofa_value': pyotp.TOTP(self.otp_seed).now(),
+                            'twofa_type': "totp",
+                            'skip_session': 'true'
+                        }
+                    )
                 )
 
         return 0
@@ -913,7 +981,7 @@ class KiteConnect(object):
 
     def _header(self):
         """Custom headers"""
-        self.headers["x-kite-userid"] = self.username,
+        self.headers["x-kite-userid"] = self.username
 
     def _request(self, route, method, url_args=None, params=None, is_json=False, query_params=None):
         """Make an HTTP request."""
@@ -923,8 +991,11 @@ class KiteConnect(object):
         else:
             uri = self._routes[route]
 
-        if uri in ["login", "twofa"]:
-            url = urljoin(self.base, uri)
+        if uri in ["login", "twofa", "connect"]:
+            if params['skip_session'] == 'true':
+                url = self.base + "?skip_session=true"
+            else:
+                url = urljoin(self.base, uri)
         else:
             url = urljoin(self.root, uri)
 
@@ -971,6 +1042,9 @@ class KiteConnect(object):
                 raise ex.DataException("Couldn't parse the JSON response received from the server: {content}".format(
                     content=r.content))
 
+            if method == "twofa" and self.api_key == None:
+                self.set_enctoken(r.cookies.get('enctoken'))         
+            
             # api error
             if data.get("status") == "error" or data.get("error_type"):
                 # Call session hook if its registered and TokenException is raised
@@ -983,6 +1057,8 @@ class KiteConnect(object):
 
             return data["data"]
         elif "csv" in r.headers["content-type"]:
+            return r.content
+        elif "html" in r.headers["content-type"]:
             return r.content
         else:
             raise ex.DataException("Unknown Content-Type ({content_type}) with response: ({content})".format(

@@ -380,6 +380,9 @@ class KiteTicker(object):
     # Default root API endpoint. It's possible to
     # override this by passing the `root` parameter during initialisation.
     ROOT_URI = "wss://ws.kite.trade"
+    BASE_URI = "wss://ws.zerodha.com"
+
+    kite_header_version = "3.0.0"
 
     # Available streaming modes.
     MODE_FULL = "full"
@@ -400,8 +403,8 @@ class KiteTicker(object):
     # Maximum number or retries user can set
     _maximum_reconnect_max_tries = 300
 
-    def __init__(self, api_key, access_token, debug=False, root=None,
-                 reconnect=True, reconnect_max_tries=RECONNECT_MAX_TRIES, reconnect_max_delay=RECONNECT_MAX_DELAY,
+    def __init__(self, username, enctoken=None, api_key=None, access_token=None, debug=False, root=None,
+                 base=None, reconnect=True, reconnect_max_tries=RECONNECT_MAX_TRIES, reconnect_max_delay=RECONNECT_MAX_DELAY,
                  connect_timeout=CONNECT_TIMEOUT):
         """
         Initialise websocket client instance.
@@ -421,6 +424,14 @@ class KiteTicker(object):
         - `connect_timeout` in seconds is the maximum interval after which connection is considered as timeout. Defaults to 30s.
         """
         self.root = root or self.ROOT_URI
+        self.base = base or self.BASE_URI
+        self.username = username
+        self.enctoken = enctoken
+        self.api_key = api_key
+        self.access_token = access_token
+
+        if not(self.enctoken or (self.api_key and self.access_token)):
+            log.error("enctoken or api_key ith access_token are mandatory")
 
         # Set max reconnect tries
         if reconnect_max_tries > self._maximum_reconnect_max_tries:
@@ -439,8 +450,24 @@ class KiteTicker(object):
             self.reconnect_max_delay = reconnect_max_delay
 
         self.connect_timeout = connect_timeout
-
-        self.socket_url = "{root}?api_key={api_key}"\
+        
+        if self.enctoken:
+            self.socket_url = "{base}?api_key={api_key}"\
+            "&user_id={user_id}"\
+            "&enctoken={enctoken}"\
+            "&uid={uid}"\
+            "&user-agent={user_agent}"\
+            "&version={version}".format(
+                root=self.base,
+                user_id=self.username,
+                enctoken=self.enctoken,
+                uid=str(int(time.time()*1000)),
+                user_agent="kite3-web",
+                api_key="kitefront",
+                version=self.kite_header_version
+            )
+        else:
+            self.socket_url = "{root}?api_key={api_key}"\
             "&access_token={access_token}".format(
                 root=self.root,
                 api_key=api_key,
@@ -491,7 +518,10 @@ class KiteTicker(object):
         self.factory.maxRetries = self.reconnect_max_tries
 
     def _user_agent(self):
-        return (__title__ + "-python/").capitalize() + __version__
+        if self.api_key and self.access_token:
+            return (__title__ + "-python/").capitalize() + __version__
+        else:
+            return ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
     def connect(self, threaded=False, disable_ssl_verification=False, proxy=None):
         """
@@ -503,7 +533,18 @@ class KiteTicker(object):
         """
         # Custom headers
         headers = {
-            "X-Kite-Version": "3",  # For version 3
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "en-US,en;q=0.9",
+            "cache-control": "no-cache",
+            "connection": "Upgrade",
+            "host": "ws.zerodha.com",
+            "origin": "https://kite.zerodha.com",
+            "pragma": "no-cache",
+            "sec-websocket-extensions": "permessage-deflate; client_max_window_bits",
+            "sec-websocket-key": "LXCqUuJ1KEgXM8VgNj63fA==",
+            "sec-websocket-version": "13",
+            "upgrade": "websocket",
+            "X-Kite-Version": "3.0.0",  # For version 3
         }
 
         # Init WebSocket client factory
